@@ -189,22 +189,8 @@ func (l *Logger) Errorf(format string, args ...any) {
 	l.logf(LogLevelError, format, args...)
 }
 
-// Exec a command.
-func (l *Logger) Exec(dir, command string) error {
-	if dir == "" || dir == "." {
-		dir = "."
-	} else {
-		l.Noticef("$ cd %s", shellquote.Join(dir))
-	}
-	lines := strings.Split(command, "\n")
-	for i, line := range lines {
-		if i == 0 {
-			l.Noticef("$ %s", line)
-		} else {
-			l.Noticef("  %s", line)
-		}
-	}
-
+// ExecCmd executes an exec.Cmd, redirecting stdout/stderr/stdin to a PTY that gets logged to this logger at info.
+func (l *Logger) ExecCmd(cmd *exec.Cmd) error {
 	p, t, err := pty.Open()
 	if err != nil {
 		return err
@@ -226,8 +212,6 @@ func (l *Logger) Exec(dir, command string) error {
 	defer p.Close()
 	lw := l.WriterAt(LogLevelInfo)
 	defer lw.Close()
-	cmd := exec.Command("/bin/sh", "-c", command)
-	cmd.Dir = dir
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setsid:  true,
 		Setctty: true,
@@ -240,6 +224,26 @@ func (l *Logger) Exec(dir, command string) error {
 	}
 	go io.Copy(lw, p) //nolint:errcheck
 	return cmd.Wait()
+}
+
+// Exec a command.
+func (l *Logger) Exec(dir, command string) error {
+	if dir == "" || dir == "." {
+		dir = "."
+	} else {
+		l.Noticef("$ cd %s", shellquote.Join(dir))
+	}
+	lines := strings.Split(command, "\n")
+	for i, line := range lines {
+		if i == 0 {
+			l.Noticef("$ %s", line)
+		} else {
+			l.Noticef("  %s", line)
+		}
+	}
+	cmd := exec.Command("/bin/sh", "-c", command)
+	cmd.Dir = dir
+	return l.ExecCmd(cmd)
 }
 
 // WriterAt returns a writer that logs each line at the given level.

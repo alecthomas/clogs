@@ -189,10 +189,8 @@ func (l *Logger) Errorf(format string, args ...any) {
 	l.logf(LogLevelError, format, args...)
 }
 
-// AdoptCmd adopts an exec.Cmd, redirecting its stdout/stderr/stdin to a PTY that gets logged to this logger at info.
-//
-// It _does not_ start the command.
-func (l *Logger) AdoptCmd(cmd *exec.Cmd) error {
+// ExecCmd executes an exec.Cmd, redirecting stdout/stderr/stdin to a PTY that gets logged to this logger at info.
+func (l *Logger) ExecCmd(cmd *exec.Cmd) error {
 	p, t, err := pty.Open()
 	if err != nil {
 		return err
@@ -221,8 +219,11 @@ func (l *Logger) AdoptCmd(cmd *exec.Cmd) error {
 	cmd.Stdout = t
 	cmd.Stderr = t
 	cmd.Stdin = t
+	if err := cmd.Start(); err != nil {
+		return err
+	}
 	go io.Copy(lw, p) //nolint:errcheck
-	return nil
+	return cmd.Wait()
 }
 
 // Exec a command.
@@ -242,11 +243,7 @@ func (l *Logger) Exec(dir, command string) error {
 	}
 	cmd := exec.Command("/bin/sh", "-c", command)
 	cmd.Dir = dir
-	err := l.AdoptCmd(cmd)
-	if err != nil {
-		return err
-	}
-	return cmd.Run()
+	return l.ExecCmd(cmd)
 }
 
 // WriterAt returns a writer that logs each line at the given level.

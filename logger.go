@@ -19,7 +19,6 @@ import (
 	"github.com/alecthomas/clogs/csi"
 	"github.com/alecthomas/types/eventsource"
 	"github.com/creack/pty"
-	"github.com/kballard/go-shellquote"
 	"github.com/mattn/go-isatty"
 	"golang.org/x/term"
 )
@@ -189,8 +188,56 @@ func (l *Logger) Errorf(format string, args ...any) {
 	l.logf(LogLevelError, format, args...)
 }
 
-// ExecCmd executes an exec.Cmd, redirecting stdout/stderr/stdin to a PTY that gets logged to this logger at info.
-func (l *Logger) ExecCmd(cmd *exec.Cmd) error {
+type execOptions struct {
+	create      func(command string) *exec.Cmd
+	afterCreate []func(*exec.Cmd)
+	afterRun    []func(*exec.Cmd)
+}
+
+// ExecOption allows Exec behaviour to be configured
+type ExecOption func(*execOptions)
+
+// ExecAfterRunHook adds a function that is called after process creation.
+func ExecAfterRunHook(callback func(*exec.Cmd)) ExecOption {
+	return func(options *execOptions) {
+		options.afterRun = append(options.afterRun, callback)
+	}
+}
+
+// ExecAfterCreateHook adds a function that is called after the command is completely constructed but before it is started.
+func ExecAfterCreateHook(callback func(*exec.Cmd)) ExecOption {
+	return func(options *execOptions) {
+		options.afterCreate = append(options.afterCreate, callback)
+	}
+}
+
+// ExecCreate adds a function to create the subprocess, overriding the default.
+func ExecCreate(create func(command string) *exec.Cmd) ExecOption {
+	return func(options *execOptions) {
+		options.create = create
+	}
+}
+
+// ExecWorkingDir sets the working dir of the subprocess.
+func ExecWorkingDir(dir string) ExecOption {
+	return func(options *execOptions) {
+		options.afterCreate = append(options.afterCreate, func(cmd *exec.Cmd) {
+			cmd.Dir = dir
+		})
+	}
+}
+
+// Exec a command.
+func (l *Logger) Exec(command string, options ...ExecOption) error {
+	lines := strings.Split(command, "\n")
+	for i, line := range lines {
+		if i == 0 {
+			l.Noticef("$ %s", line)
+		} else {
+			l.Noticef("  %s", line)
+		}
+	}
+
 	p, t, err := pty.Open()
 	if err != nil {
 		return err
@@ -212,38 +259,37 @@ func (l *Logger) ExecCmd(cmd *exec.Cmd) error {
 	defer p.Close()
 	lw := l.WriterAt(LogLevelInfo)
 	defer lw.Close()
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setsid:  true,
-		Setctty: true,
+
+	opts := execOptions{
+		create: func(command string) *exec.Cmd {
+			return exec.Command("/bin/sh", "-c", command)
+		},
+	}
+	for _, option := range options {
+		option(&opts)
+	}
+
+	cmd := opts.create(command)
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			Setsid:  true,
+			Setctty: true,
+		}
 	}
 	cmd.Stdout = t
 	cmd.Stderr = t
 	cmd.Stdin = t
+	for _, hook := range opts.afterCreate {
+		hook(cmd)
+	}
 	if err := cmd.Start(); err != nil {
 		return err
 	}
 	go io.Copy(lw, p) //nolint:errcheck
+	for _, hook := range opts.afterRun {
+		hook(cmd)
+	}
 	return cmd.Wait()
-}
-
-// Exec a command.
-func (l *Logger) Exec(dir, command string) error {
-	if dir == "" || dir == "." {
-		dir = "."
-	} else {
-		l.Noticef("$ cd %s", shellquote.Join(dir))
-	}
-	lines := strings.Split(command, "\n")
-	for i, line := range lines {
-		if i == 0 {
-			l.Noticef("$ %s", line)
-		} else {
-			l.Noticef("  %s", line)
-		}
-	}
-	cmd := exec.Command("/bin/sh", "-c", command)
-	cmd.Dir = dir
-	return l.ExecCmd(cmd)
 }
 
 // WriterAt returns a writer that logs each line at the given level.

@@ -383,9 +383,7 @@ func (l *Logger) writerScanner(wg *sync.WaitGroup, r *io.PipeReader, level LogLe
 			}
 			for _, nl := range newline {
 				os.Stdout.Write([]byte{nl})
-				if nl == '\n' {
-					os.Stdout.Write([]byte(l.getPrefix(level)))
-				}
+				os.Stdout.Write([]byte(l.getPrefix(level)))
 			}
 			newline = nil
 			os.Stdout.Write([]byte{b})
